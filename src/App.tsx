@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import type { PageRecord, QuadCorners, FilterType, DrawingStroke, OCRData, MathOCRFormula } from './types/scanner';
+import type { PageRecord, QuadCorners, FilterType, DrawingStroke, OCRData, MathOCRFormula, PaperFormat } from './types/scanner';
 import { getCommittedPages, saveDraftPage, getSetting, setSetting } from './db/dexieDb';
 import { ToastProvider, useToast } from './components/common/Toast';
 import { HomeDashboard } from './components/home/HomeDashboard';
@@ -176,16 +176,16 @@ const ScannerApp: React.FC = () => {
     showToast(`⚡ Đã nạp thành công ${files.length} trang vào tài liệu!`, 'success');
   };
 
-  // Instant 1-click fast PDF creation & download
-  const handleFastExportPDF = async () => {
+  // Instant 1-click fast PDF creation & download with A4/A5 support
+  const handleFastExportPDF = async (format: PaperFormat = 'a4') => {
     if (committedPages.length === 0) {
       showToast('Chưa có trang nào để tạo PDF', 'error');
       return;
     }
 
     try {
-      showToast('Đang tạo PDF siêu tốc...', 'info', 1000);
-      const { pdfBytes, filename } = await pdfService.generateFastPDF(committedPages);
+      showToast(`Đang tạo PDF ${format.toUpperCase()} siêu nét cho AI...`, 'info', 1000);
+      const { pdfBytes, filename } = await pdfService.generateFastPDF(committedPages, undefined, undefined, format);
 
       const blob = new Blob([pdfBytes as Uint8Array<ArrayBuffer>], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);

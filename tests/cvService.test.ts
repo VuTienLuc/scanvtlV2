@@ -3,6 +3,7 @@ import {
   distance,
   orderCorners,
   getDefaultCorners,
+  getStandardFormatCorners,
   getPerspectiveHomography,
   splitBookPages
 } from '../src/services/cvService';
@@ -71,5 +72,18 @@ describe('cvService - Geometric & Computer Vision Calculations', () => {
     const split60 = splitBookPages(fakeCanvas, 0.6);
     expect(split60.leftCanvas.width).toBe(600);
     expect(split60.rightCanvas.width).toBe(400);
+  });
+
+  it('calculates standard A4 and A5 format corners with 1:1.414 aspect ratio', () => {
+    const a4 = getStandardFormatCorners(1000, 1500, 'a4', false);
+    const wA4 = a4.topRight.x - a4.topLeft.x;
+    const hA4 = a4.bottomLeft.y - a4.topLeft.y;
+    expect(hA4 / wA4).toBeCloseTo(1.414, 1);
+
+    const a5 = getStandardFormatCorners(1000, 1500, 'a5', false);
+    const wA5 = a5.topRight.x - a5.topLeft.x;
+    const hA5 = a5.bottomLeft.y - a5.topLeft.y;
+    expect(hA5 / wA5).toBeCloseTo(1.414, 1);
+    expect(wA5).toBeLessThan(wA4); // A5 is more compact
   });
 });

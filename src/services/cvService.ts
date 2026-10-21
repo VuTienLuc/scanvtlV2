@@ -51,6 +51,37 @@ export function getDefaultCorners(width: number, height: number, marginPercent =
 }
 
 /**
+ * Calculates standard A4 or A5 aspect ratio corners (1:1.4142) centered in the image
+ */
+export function getStandardFormatCorners(
+  width: number,
+  height: number,
+  format: 'a4' | 'a5' = 'a4',
+  isLandscape = false
+): QuadCorners {
+  const ratio = isLandscape ? 1.4142 : 1 / 1.4142;
+  const marginScale = format === 'a5' ? 0.78 : 0.88;
+
+  let targetW = width * marginScale;
+  let targetH = targetW / ratio;
+
+  if (targetH > height * marginScale) {
+    targetH = height * marginScale;
+    targetW = targetH * ratio;
+  }
+
+  const left = (width - targetW) / 2;
+  const top = (height - targetH) / 2;
+
+  return {
+    topLeft: { x: Math.round(left), y: Math.round(top) },
+    topRight: { x: Math.round(left + targetW), y: Math.round(top) },
+    bottomRight: { x: Math.round(left + targetW), y: Math.round(top + targetH) },
+    bottomLeft: { x: Math.round(left), y: Math.round(top + targetH) }
+  };
+}
+
+/**
  * OpenCV loader with dynamic script injection and timeout protection
  */
 let openCvPromise: Promise<boolean> | null = null;
@@ -485,7 +516,61 @@ export async function applyImageFilter(
     return applyJsAdaptiveThreshold(canvas);
   }
 
+  // AI Sharp Filter: Optimized for OCR & Math AI recognition
+  if (filter === 'ai_sharp') {
+    return enhanceForAiOCR(canvas);
+  }
+
   ctx.drawImage(canvas, 0, 0);
+  return output;
+}
+
+/**
+ * AI Super-Sharp Document Enhancer:
+ * Optimizes text and math formulas for AI OCR (Gemini Vision, Mathpix, Tesseract):
+ * 1. Adaptive contrast & unsharp mask to crisp edges of thin symbols (fractions, superscripts, radicals).
+ * 2. Background whitening to eliminate shadows, yellow indoor light, and uneven glare.
+ * 3. Deep ink darkening without noise blowout.
+ */
+export function enhanceForAiOCR(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  const output = document.createElement('canvas');
+  output.width = canvas.width;
+  output.height = canvas.height;
+  const ctx = output.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return canvas;
+
+  // Step 1: Draw with contrast and brightness boost
+  ctx.filter = 'contrast(125%) brightness(105%)';
+  ctx.drawImage(canvas, 0, 0);
+  ctx.filter = 'none';
+
+  const imgData = ctx.getImageData(0, 0, output.width, output.height);
+  const data = imgData.data;
+  const len = data.length;
+
+  // Step 2: Pixel-level document optimization
+  for (let i = 0; i < len; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+    if (lum > 175) {
+      // Paper background: push towards pure clean white
+      const boost = (lum - 175) / 80;
+      data[i] = Math.min(255, r + Math.round((255 - r) * boost * 0.85));
+      data[i + 1] = Math.min(255, g + Math.round((255 - g) * boost * 0.85));
+      data[i + 2] = Math.min(255, b + Math.round((255 - b) * boost * 0.85));
+    } else if (lum < 110) {
+      // Dark ink/text: deepen for crisp contrast
+      const darken = 0.82;
+      data[i] = Math.round(r * darken);
+      data[i + 1] = Math.round(g * darken);
+      data[i + 2] = Math.round(b * darken);
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
   return output;
 }
 

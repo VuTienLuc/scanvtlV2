@@ -12,6 +12,7 @@ import {
 import type { Point, QuadCorners, FilterType, DrawingStroke } from '../../types/scanner';
 import {
   getDefaultCorners,
+  getStandardFormatCorners,
   detectDocumentCorners,
   applyPerspectiveWarp,
   applyImageFilter,
@@ -114,6 +115,14 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     if (!sourceImg) return;
     setCorners(getDefaultCorners(sourceImg.width, sourceImg.height, 0.06));
     showToast('Đã đặt lại 4 góc chuẩn', 'info');
+  };
+
+  const handleSnapStandard = (format: 'a4' | 'a5') => {
+    if (!sourceImg) return;
+    const isLandscape = sourceImg.width > sourceImg.height;
+    const standardCorners = getStandardFormatCorners(sourceImg.width, sourceImg.height, format, isLandscape);
+    setCorners(standardCorners);
+    showToast(`Đã căn góc theo tỉ lệ chuẩn ${format.toUpperCase()} (${isLandscape ? 'Khổ ngang' : 'Khổ dọc'})`, 'info', 1500);
   };
 
   const handleRotate = () => {
@@ -510,12 +519,26 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
         }}
       >
         {editorMode === 'crop' ? (
-          <div style={{ display: 'flex', justifyContent: 'center', gap: 12 }}>
-            <button onClick={handleAutoDetect} className="btn btn-secondary" style={{ fontSize: 13 }}>
-              <Sparkles size={16} color="#3b82f6" /> Tự tìm 4 góc (AI)
+          <div style={{ display: 'flex', justifyContent: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={handleAutoDetect} className="btn btn-secondary" style={{ fontSize: 12 }}>
+              <Sparkles size={15} color="#3b82f6" /> Tự tìm 4 góc (AI)
             </button>
-            <button onClick={handleResetCorners} className="btn btn-ghost" style={{ fontSize: 13 }}>
-              Đặt lại góc chuẩn
+            <button
+              onClick={() => handleSnapStandard('a4')}
+              className="btn btn-secondary"
+              style={{ fontSize: 12 }}
+            >
+              Căn Khung A4
+            </button>
+            <button
+              onClick={() => handleSnapStandard('a5')}
+              className="btn btn-secondary"
+              style={{ fontSize: 12 }}
+            >
+              Căn Khung A5
+            </button>
+            <button onClick={handleResetCorners} className="btn btn-ghost" style={{ fontSize: 12 }}>
+              Đặt lại góc
             </button>
           </div>
         ) : (
@@ -525,6 +548,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, overflowX: 'auto' }}>
               {(
                 [
+                  { id: 'ai_sharp', label: 'Nét AI', icon: '🤖' },
                   { id: 'clean', label: 'Sạch nền', icon: '✨' },
                   { id: 'enhanced', label: 'Nét chữ', icon: '📄' },
                   { id: 'bw', label: 'Trắng đen', icon: '🌗' },

@@ -10,7 +10,9 @@ export interface QuadCorners {
   bottomLeft: Point;
 }
 
-export type FilterType = 'original' | 'enhanced' | 'grayscale' | 'bw' | 'clean';
+export type PaperFormat = 'a4' | 'a5';
+
+export type FilterType = 'original' | 'enhanced' | 'grayscale' | 'bw' | 'clean' | 'ai_sharp';
 
 export type PageStatus = 'captured' | 'editing' | 'committed' | 'exporting' | 'exported';
 

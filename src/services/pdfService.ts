@@ -258,7 +258,8 @@ export class PDFService {
   async generateFastPDF(
     pages: PageRecord[],
     customFilename?: string,
-    onProgress?: (progress: number, statusText: string) => void
+    onProgress?: (progress: number, statusText: string) => void,
+    pageSize: 'a4' | 'a5' = 'a4'
   ): Promise<{ pdfBytes: Uint8Array; filename: string }> {
     if (pages.length === 0) {
       throw new Error('Danh sách trang trống, không thể tạo PDF.');
@@ -266,13 +267,13 @@ export class PDFService {
 
     const now = new Date();
     const dateStr = `${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}_${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}${now.getSeconds().toString().padStart(2, '0')}`;
-    const filename = customFilename || `TaiLieu_QuetNhanh_${dateStr}.pdf`;
+    const filename = customFilename || `TaiLieu_QuetNhanh_${pageSize.toUpperCase()}_${dateStr}.pdf`;
 
     const pdfDoc = await PDFDocument.create();
     pdfDoc.setTitle(filename.replace(/\.pdf$/i, ''));
     pdfDoc.setCreator('Scanner Pro EDU');
 
-    const a4Dim = PAGE_SIZES.a4;
+    const pageDim = PAGE_SIZES[pageSize] || PAGE_SIZES.a4;
 
     for (let i = 0; i < pages.length; i++) {
       const page = pages[i];
@@ -294,8 +295,8 @@ export class PDFService {
 
       // Auto orientation based on aspect ratio
       const isLandscape = imgWidth > imgHeight;
-      const targetWidth = isLandscape ? a4Dim.height : a4Dim.width;
-      const targetHeight = isLandscape ? a4Dim.width : a4Dim.height;
+      const targetWidth = isLandscape ? pageDim.height : pageDim.width;
+      const targetHeight = isLandscape ? pageDim.width : pageDim.height;
 
       const pdfPage = pdfDoc.addPage([targetWidth, targetHeight]);
 

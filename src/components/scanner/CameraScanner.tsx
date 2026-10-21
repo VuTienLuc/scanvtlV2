@@ -11,11 +11,14 @@ import {
   Zap,
   Timer,
   Download,
-  Layers
+  Layers,
+  Sparkles,
+  Crop
 } from 'lucide-react';
 import { cameraService, type CameraError } from '../../services/cameraService';
+import { enhanceForAiOCR } from '../../services/cvService';
 import { useToast } from '../common/Toast';
-import type { PageRecord } from '../../types/scanner';
+import type { PageRecord, PaperFormat } from '../../types/scanner';
 
 export type ScanMode = 'single' | 'continuous' | 'book';
 
@@ -23,7 +26,7 @@ interface CameraScannerProps {
   onCapture: (sourceDataUrl: string, isBookMode: boolean) => void;
   onContinuousCapture: (sourceDataUrl: string) => Promise<void>;
   onBatchImportFiles?: (files: File[]) => Promise<void>;
-  onFastExportPDF?: () => Promise<void>;
+  onFastExportPDF?: (format?: PaperFormat) => Promise<void>;
   onOpenPageManager: () => void;
   onClose: () => void;
   committedPages: PageRecord[];
@@ -50,6 +53,14 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   const [scanMode, setScanMode] = useState<ScanMode>(initialMode);
   const [hasTorch, setHasTorch] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
+
+  // Paper format guide standard: A4 vs A5
+  const [paperFormat, setPaperFormat] = useState<PaperFormat>('a4');
+  // AI OCR sharpness & paper whitening enhancement
+  const [isAiSharp, setIsAiSharp] = useState<boolean>(true);
+  // Auto crop directly to guide box (removes desk & background)
+  const [isCropToGuide, setIsCropToGuide] = useState<boolean>(true);
+  const guideRef = useRef<HTMLDivElement>(null);
 
   // Auto-timer for continuous hands-free scanning (0 = off, 2 = 2s, 3 = 3s, 4 = 4s)
   const [autoTimerSeconds, setAutoTimerSeconds] = useState<number>(0);
@@ -102,22 +113,77 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     setIsTorchOn(nextState);
   };
 
-  // Capture frame
+  // Capture frame strictly inside A4 / A5 guide or full sensor
   const captureFrameDataUrl = useCallback((): string | null => {
     const video = videoRef.current;
     if (!video || !video.videoWidth || !video.videoHeight) {
       return null;
     }
 
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const guide = guideRef.current;
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.92);
-  }, []);
+    let targetCanvas: HTMLCanvasElement;
+
+    if (isCropToGuide && guide) {
+      const videoRect = video.getBoundingClientRect();
+      const guideRect = guide.getBoundingClientRect();
+      const cw = videoRect.width;
+      const ch = videoRect.height;
+
+      if (cw > 0 && ch > 0) {
+        // Calculate mapping when video has CSS objectFit: 'cover'
+        const scale = Math.max(cw / vw, ch / vh);
+        const renderedW = vw * scale;
+        const renderedH = vh * scale;
+        const offsetX = (renderedW - cw) / 2;
+        const offsetY = (renderedH - ch) / 2;
+
+        const cropX = Math.max(0, Math.min(vw - 20, ((guideRect.left - videoRect.left) + offsetX) / scale));
+        const cropY = Math.max(0, Math.min(vh - 20, ((guideRect.top - videoRect.top) + offsetY) / scale));
+        const cropW = Math.max(40, Math.min(vw - cropX, guideRect.width / scale));
+        const cropH = Math.max(40, Math.min(vh - cropY, guideRect.height / scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(cropW);
+        canvas.height = Math.round(cropH);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
+          targetCanvas = canvas;
+        } else {
+          const fCanvas = document.createElement('canvas');
+          fCanvas.width = vw;
+          fCanvas.height = vh;
+          const fCtx = fCanvas.getContext('2d');
+          fCtx?.drawImage(video, 0, 0);
+          targetCanvas = fCanvas;
+        }
+      } else {
+        const fCanvas = document.createElement('canvas');
+        fCanvas.width = vw;
+        fCanvas.height = vh;
+        const fCtx = fCanvas.getContext('2d');
+        fCtx?.drawImage(video, 0, 0);
+        targetCanvas = fCanvas;
+      }
+    } else {
+      const fCanvas = document.createElement('canvas');
+      fCanvas.width = vw;
+      fCanvas.height = vh;
+      const fCtx = fCanvas.getContext('2d');
+      fCtx?.drawImage(video, 0, 0);
+      targetCanvas = fCanvas;
+    }
+
+    // Apply AI document sharpness & contrast enhancement if enabled
+    if (isAiSharp) {
+      targetCanvas = enhanceForAiOCR(targetCanvas);
+    }
+
+    return targetCanvas.toDataURL('image/jpeg', 0.96);
+  }, [isCropToGuide, isAiSharp]);
 
   // Main shutter click handler
   const handleCapture = useCallback(async () => {
@@ -350,6 +416,119 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         </div>
       </div>
 
+      {/* Floating Toolbar: A4 / A5 + Nét AI + Cắt khung */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 68,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 22,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          background: 'rgba(15, 23, 42, 0.88)',
+          backdropFilter: 'blur(12px)',
+          border: '1px solid rgba(255, 255, 255, 0.12)',
+          borderRadius: 'var(--radius-full)',
+          padding: '4px 8px',
+          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.45)',
+          maxWidth: '92%'
+        }}
+      >
+        {/* A4 vs A5 Toggle */}
+        <div style={{ display: 'flex', background: 'rgba(30, 41, 59, 0.7)', borderRadius: 'var(--radius-full)', padding: 2 }}>
+          <button
+            onClick={() => {
+              setPaperFormat('a4');
+              showToast('Khung chuẩn A4 (Tỉ lệ 1 : 1.414)', 'info', 1200);
+            }}
+            style={{
+              padding: '4px 10px',
+              borderRadius: 'var(--radius-full)',
+              border: 'none',
+              background: paperFormat === 'a4' ? '#3b82f6' : 'transparent',
+              color: paperFormat === 'a4' ? '#fff' : '#94a3b8',
+              fontWeight: 700,
+              fontSize: 11,
+              cursor: 'pointer'
+            }}
+          >
+            Khổ A4
+          </button>
+          <button
+            onClick={() => {
+              setPaperFormat('a5');
+              showToast('Khung chuẩn A5 (Gọn gàng cho sách vở A5)', 'info', 1200);
+            }}
+            style={{
+              padding: '4px 10px',
+              borderRadius: 'var(--radius-full)',
+              border: 'none',
+              background: paperFormat === 'a5' ? '#f59e0b' : 'transparent',
+              color: paperFormat === 'a5' ? '#fff' : '#94a3b8',
+              fontWeight: 700,
+              fontSize: 11,
+              cursor: 'pointer'
+            }}
+          >
+            Khổ A5
+          </button>
+        </div>
+
+        <div style={{ width: 1, height: 16, background: 'rgba(255, 255, 255, 0.15)' }} />
+
+        {/* AI Sharp toggle */}
+        <button
+          onClick={() => {
+            setIsAiSharp((prev) => !prev);
+            showToast(!isAiSharp ? 'Đã bật NÉT CHUẨN AI (Sắc nét chữ, trắng sáng giấy)' : 'Đã tắt nét AI (Dùng ảnh gốc)', 'info', 1500);
+          }}
+          style={{
+            padding: '4px 10px',
+            borderRadius: 'var(--radius-full)',
+            border: 'none',
+            background: isAiSharp ? 'rgba(56, 189, 248, 0.25)' : 'transparent',
+            color: isAiSharp ? '#38bdf8' : '#94a3b8',
+            fontWeight: 700,
+            fontSize: 11,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4
+          }}
+          title="Làm trắng nền giấy & tăng độ nét chữ cho AI đọc chính xác"
+        >
+          <Sparkles size={13} /> {isAiSharp ? 'Nét AI: BẬT' : 'Nét AI: TẮT'}
+        </button>
+
+        <div style={{ width: 1, height: 16, background: 'rgba(255, 255, 255, 0.15)' }} />
+
+        {/* Crop to Guide toggle */}
+        <button
+          onClick={() => {
+            setIsCropToGuide((prev) => !prev);
+            showToast(!isCropToGuide ? 'Cắt chính xác chỉ lấy vùng trong khung A4/A5' : 'Chụp toàn cảnh (Không cắt theo khung)', 'info', 1500);
+          }}
+          style={{
+            padding: '4px 10px',
+            borderRadius: 'var(--radius-full)',
+            border: 'none',
+            background: isCropToGuide ? 'rgba(52, 211, 153, 0.25)' : 'transparent',
+            color: isCropToGuide ? '#34d399' : '#94a3b8',
+            fontWeight: 700,
+            fontSize: 11,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4
+          }}
+          title="Tự động cắt đúng hình ảnh nằm trong khung A4/A5"
+        >
+          <Crop size={13} /> {isCropToGuide ? 'Khớp Khung' : 'Toàn Cảnh'}
+        </button>
+      </div>
+
       {/* Video Viewport / Error View */}
       <div
         style={{
@@ -433,7 +612,21 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
             {/* Guide overlay box */}
-            <div className={`a4-guide ${scanMode === 'book' ? 'book-mode' : ''}`} />
+            <div
+              ref={guideRef}
+              className={`a4-guide ${paperFormat === 'a5' ? 'a5-mode' : ''} ${scanMode === 'book' ? 'book-mode' : ''}`}
+            >
+              <div className="guide-corner guide-corner-tl" />
+              <div className="guide-corner guide-corner-tr" />
+              <div className="guide-corner guide-corner-bl" />
+              <div className="guide-corner guide-corner-br" />
+              <div className="guide-badge">
+                {scanMode === 'book'
+                  ? `SÁCH 2 TRANG (${paperFormat.toUpperCase()})`
+                  : `KHUNG ${paperFormat.toUpperCase()} ${isCropToGuide ? '• CẮT CHUẨN' : ''}`}
+                {isAiSharp ? ' • ✨ NÉT AI' : ''}
+              </div>
+            </div>
           </>
         )}
 
@@ -465,7 +658,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
         {committedPages.length > 0 && onFastExportPDF && (
           <div style={{ width: '100%', maxWidth: 440, marginBottom: 10, display: 'flex', gap: 8 }}>
             <button
-              onClick={onFastExportPDF}
+              onClick={() => onFastExportPDF(paperFormat)}
               className="btn btn-emerald"
               style={{
                 flex: 1,
@@ -476,7 +669,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
                 boxShadow: '0 4px 15px rgba(16, 185, 129, 0.35)'
               }}
             >
-              <Download size={16} /> Tạo PDF Ngay ({committedPages.length} trang)
+              <Download size={16} /> Tạo PDF {paperFormat.toUpperCase()} Siêu Nét ({committedPages.length} trang)
             </button>
 
             <button
