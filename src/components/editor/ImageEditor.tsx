@@ -74,6 +74,8 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
 
   // Crop shape preset: 'a4' | 'a5' | 'free' | 'full'
   const [cropShapeMode, setCropShapeMode] = useState<'a4' | 'a5' | 'free' | 'full'>('a4');
+  // Paper orientation: default is ALWAYS portrait (false = dọc)
+  const [isLandscapeOrientation, setIsLandscapeOrientation] = useState<boolean>(false);
 
   // Active dragging handle ('topLeft' | 'topRight' | 'bottomRight' | 'bottomLeft' | 'center' | null)
   const [activeHandle, setActiveHandle] = useState<keyof QuadCorners | 'center' | null>(null);
@@ -86,7 +88,8 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     img.onload = () => {
       setSourceImg(img);
       if (!corners) {
-        setCorners(getStandardFormatCorners(img.width, img.height, 'a4', img.width > img.height));
+        // Mặc định luôn là khổ DỌC (A4 portrait: 1 / 1.414)
+        setCorners(getStandardFormatCorners(img.width, img.height, 'a4', false));
       }
     };
     img.src = sourceDataUrl;
@@ -115,13 +118,21 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     }
   };
 
-
-  const handleSnapStandard = (format: 'a4' | 'a5') => {
+  const handleSnapStandard = (format: 'a4' | 'a5', landscape: boolean = isLandscapeOrientation) => {
     if (!sourceImg) return;
-    const isLandscape = sourceImg.width > sourceImg.height;
-    const standardCorners = getStandardFormatCorners(sourceImg.width, sourceImg.height, format, isLandscape);
+    const standardCorners = getStandardFormatCorners(sourceImg.width, sourceImg.height, format, landscape);
     setCorners(standardCorners);
-    showToast(`Đã căn góc theo tỉ lệ chuẩn ${format.toUpperCase()} (${isLandscape ? 'Khổ ngang' : 'Khổ dọc'})`, 'info', 1500);
+    showToast(`Đã căn góc chuẩn ${format.toUpperCase()} (${landscape ? 'Khổ ngang ↔️' : 'Khổ dọc ↕️ (Mặc định)'})`, 'info', 1500);
+  };
+
+  const handleToggleOrientation = () => {
+    if (!sourceImg) return;
+    const nextLandscape = !isLandscapeOrientation;
+    setIsLandscapeOrientation(nextLandscape);
+    const targetFormat = cropShapeMode === 'a5' ? 'a5' : 'a4';
+    const standardCorners = getStandardFormatCorners(sourceImg.width, sourceImg.height, targetFormat, nextLandscape);
+    setCorners(standardCorners);
+    showToast(`Đã chuyển sang ${targetFormat.toUpperCase()} ${nextLandscape ? 'Khổ Ngang ↔️' : 'Khổ Dọc ↕️ (Mặc định)'}`, 'info', 1500);
   };
 
   const handleRotate = () => {
@@ -259,8 +270,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     const clampedY = Math.max(0, Math.min(sourceImg.height, clientY * scaleY));
 
     if (cropShapeMode === 'a4' || cropShapeMode === 'a5') {
-      const isLandscape = sourceImg.width > sourceImg.height;
-      const ratio = isLandscape ? 1.4142 : 1 / 1.4142;
+      const ratio = isLandscapeOrientation ? 1.4142 : 1 / 1.4142;
 
       let anchorKey: keyof QuadCorners;
       if (activeHandle === 'bottomRight') anchorKey = 'topLeft';
@@ -623,9 +633,9 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
                 }}
               >
                 {cropShapeMode === 'a4'
-                  ? '📄 KHUNG A4 CHUẨN (1 : 1.414)'
+                  ? `📄 KHUNG A4 ${isLandscapeOrientation ? 'NGANG (1.414 : 1)' : 'DỌC CHUẨN (1 : 1.414)'}`
                   : cropShapeMode === 'a5'
-                  ? '📘 KHUNG A5 CHUẨN'
+                  ? `📘 KHUNG A5 ${isLandscapeOrientation ? 'NGANG' : 'DỌC CHUẨN'}`
                   : cropShapeMode === 'full'
                   ? '🖼️ TOÀN BỘ ẢNH'
                   : '📐 KHUNG TỰ DO (4 GÓC)'}
@@ -807,21 +817,43 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
               </button>
             </div>
 
-            {/* Row 2: Smart Detection & Centering Actions */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            {/* Row 2: Smart Detection, Orientation Toggle & Centering Actions */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
               <button
                 onClick={handleAutoDetect}
                 className="btn btn-secondary"
-                style={{ flex: 1.2, padding: '8px 12px', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                style={{ flex: 1.1, padding: '8px 10px', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
                 title="Tự động phát hiện mép sách/tài liệu"
               >
-                <Sparkles size={15} color="#38bdf8" /> ✨ AI Tìm Mép Sách
+                <Sparkles size={14} color="#38bdf8" /> ✨ AI Mép Sách
+              </button>
+
+              <button
+                onClick={handleToggleOrientation}
+                className="btn btn-ghost"
+                style={{
+                  flex: 1,
+                  padding: '8px 8px',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: isLandscapeOrientation ? '#f59e0b' : '#34d399',
+                  background: isLandscapeOrientation ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                  border: isLandscapeOrientation ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid rgba(16, 185, 129, 0.4)',
+                  borderRadius: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 4
+                }}
+                title={isLandscapeOrientation ? 'Khổ Ngang - Bấm để chuyển về Khổ Dọc (Mặc định)' : 'Khổ Dọc (Mặc định) - Bấm để chuyển sang Khổ Ngang'}
+              >
+                {isLandscapeOrientation ? '↔️ Khổ Ngang' : '↕️ Khổ Dọc'}
               </button>
 
               <button
                 onClick={() => handleSnapStandard(cropShapeMode === 'a5' ? 'a5' : 'a4')}
                 className="btn btn-ghost"
-                style={{ flex: 0.9, padding: '8px 10px', fontSize: 12, color: '#94a3b8', background: 'rgba(30, 41, 59, 0.5)', borderRadius: 8, textAlign: 'center' }}
+                style={{ flex: 0.8, padding: '8px 8px', fontSize: 12, color: '#94a3b8', background: 'rgba(30, 41, 59, 0.5)', borderRadius: 8, textAlign: 'center' }}
                 title="Đặt lại khung về giữa ảnh"
               >
                 Căn Giữa
@@ -830,10 +862,10 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
               <button
                 onClick={handleRotate}
                 className="btn btn-ghost"
-                style={{ flex: 0.9, padding: '8px 10px', fontSize: 12, color: '#94a3b8', background: 'rgba(30, 41, 59, 0.5)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
+                style={{ flex: 0.8, padding: '8px 8px', fontSize: 12, color: '#94a3b8', background: 'rgba(30, 41, 59, 0.5)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
                 title="Xoay ảnh 90 độ"
               >
-                <RotateCw size={14} /> Xoay 90°
+                <RotateCw size={13} /> Xoay 90°
               </button>
             </div>
 

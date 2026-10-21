@@ -56,6 +56,8 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
   // Paper format guide standard: A4 vs A5
   const [paperFormat, setPaperFormat] = useState<PaperFormat>('a4');
+  // Paper orientation: default 'portrait' (dọc)
+  const [paperOrientation, setPaperOrientation] = useState<'portrait' | 'landscape'>('portrait');
   // AI OCR sharpness & paper whitening enhancement
   const [isAiSharp, setIsAiSharp] = useState<boolean>(true);
   // Auto crop directly to guide box (removes desk & background)
@@ -476,6 +478,35 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           </button>
         </div>
 
+        {/* Orientation Toggle: Dọc (Mặc định) vs Ngang */}
+        {scanMode !== 'book' && (
+          <button
+            onClick={() => {
+              setPaperOrientation((prev) => {
+                const next = prev === 'portrait' ? 'landscape' : 'portrait';
+                showToast(`Đã chuyển sang ${next === 'portrait' ? 'Khổ Dọc ↕️ (Mặc định)' : 'Khổ Ngang ↔️'}`, 'info', 1200);
+                return next;
+              });
+            }}
+            style={{
+              padding: '4px 9px',
+              borderRadius: 'var(--radius-full)',
+              border: 'none',
+              background: paperOrientation === 'portrait' ? 'rgba(16, 185, 129, 0.25)' : 'rgba(245, 158, 11, 0.25)',
+              color: paperOrientation === 'portrait' ? '#34d399' : '#f59e0b',
+              fontWeight: 700,
+              fontSize: 11,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3
+            }}
+            title="Đổi hướng khổ giấy Dọc / Ngang"
+          >
+            {paperOrientation === 'portrait' ? '↕️ Dọc' : '↔️ Ngang'}
+          </button>
+        )}
+
         <div style={{ width: 1, height: 16, background: 'rgba(255, 255, 255, 0.15)' }} />
 
         {/* AI Sharp toggle */}
@@ -614,7 +645,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
             {/* Guide overlay box */}
             <div
               ref={guideRef}
-              className={`a4-guide ${paperFormat === 'a5' ? 'a5-mode' : ''} ${scanMode === 'book' ? 'book-mode' : ''}`}
+              className={`a4-guide ${paperFormat === 'a5' ? 'a5-mode' : ''} ${scanMode === 'book' ? 'book-mode' : ''} ${paperOrientation === 'landscape' && scanMode !== 'book' ? 'landscape-mode' : ''}`}
             >
               <div className="guide-corner guide-corner-tl" />
               <div className="guide-corner guide-corner-tr" />
@@ -623,7 +654,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
               <div className="guide-badge">
                 {scanMode === 'book'
                   ? `SÁCH 2 TRANG (${paperFormat.toUpperCase()})`
-                  : `KHUNG ${paperFormat.toUpperCase()} ${isCropToGuide ? '• CẮT CHUẨN' : ''}`}
+                  : `KHUNG ${paperFormat.toUpperCase()} ${paperOrientation === 'landscape' ? 'NGANG' : 'DỌC CHUẨN'} ${isCropToGuide ? '• CẮT CHUẨN' : ''}`}
                 {isAiSharp ? ' • ✨ NÉT AI' : ''}
               </div>
             </div>

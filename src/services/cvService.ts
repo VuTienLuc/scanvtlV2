@@ -49,7 +49,8 @@ export function getDefaultCorners(width: number, height: number, marginPercent?:
       bottomLeft: { x: Math.round(mx), y: Math.round(height - my) }
     };
   }
-  return getStandardFormatCorners(width, height, 'a4', width > height);
+  // Mặc định luôn là khổ DỌC (A4 portrait: 1 / 1.414)
+  return getStandardFormatCorners(width, height, 'a4', false);
 }
 
 /**

@@ -112,11 +112,23 @@ html, body {
   transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.a4-guide.landscape-mode {
+  aspect-ratio: 1.414 / 1;
+  width: 90%;
+  max-height: 65vh;
+}
+
 .a4-guide.a5-mode {
   aspect-ratio: 1 / 1.414;
   width: 72%;
   max-height: 65vh;
   border-color: rgba(245, 158, 11, 0.85);
+}
+
+.a4-guide.a5-mode.landscape-mode {
+  aspect-ratio: 1.414 / 1;
+  width: 80%;
+  max-height: 55vh;
 }
 
 .a4-guide.book-mode {
