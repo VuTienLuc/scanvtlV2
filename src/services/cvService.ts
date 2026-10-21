@@ -38,15 +38,29 @@ export function orderCorners(points: Point[]): QuadCorners {
 /**
  * Calculates default crop corners based on standard A4 aspect ratio in image center
  */
-export function getDefaultCorners(width: number, height: number, marginPercent = 0.08): QuadCorners {
-  const mx = width * marginPercent;
-  const my = height * marginPercent;
+export function getDefaultCorners(width: number, height: number, marginPercent?: number): QuadCorners {
+  if (marginPercent !== undefined) {
+    const mx = width * marginPercent;
+    const my = height * marginPercent;
+    return {
+      topLeft: { x: Math.round(mx), y: Math.round(my) },
+      topRight: { x: Math.round(width - mx), y: Math.round(my) },
+      bottomRight: { x: Math.round(width - mx), y: Math.round(height - my) },
+      bottomLeft: { x: Math.round(mx), y: Math.round(height - my) }
+    };
+  }
+  return getStandardFormatCorners(width, height, 'a4', width > height);
+}
 
+/**
+ * Returns corners that encompass the entire image frame
+ */
+export function getWholeImageCorners(width: number, height: number, margin = 4): QuadCorners {
   return {
-    topLeft: { x: mx, y: my },
-    topRight: { x: width - mx, y: my },
-    bottomRight: { x: width - mx, y: height - my },
-    bottomLeft: { x: mx, y: height - my }
+    topLeft: { x: margin, y: margin },
+    topRight: { x: width - margin, y: margin },
+    bottomRight: { x: width - margin, y: height - margin },
+    bottomLeft: { x: margin, y: height - margin }
   };
 }
 
@@ -211,20 +225,45 @@ export async function detectDocumentCorners(
 
       if (area > minArea && area > maxArea) {
         const peri = cv.arcLength(contour, true);
-        const approx = new cv.Mat();
-        cv.approxPolyDP(contour, approx, 0.02 * peri, true);
+        let foundQuad = false;
 
-        if (approx.rows === 4 && cv.isContourConvex(approx)) {
-          maxArea = area;
-          bestPoly = [];
-          for (let r = 0; r < 4; r++) {
-            bestPoly.push({
-              x: (approx.data32S[r * 2] / scale),
-              y: (approx.data32S[r * 2 + 1] / scale)
-            });
+        // Try multiple approximation thresholds
+        for (const eps of [0.02, 0.035, 0.05, 0.08]) {
+          const approx = new cv.Mat();
+          cv.approxPolyDP(contour, approx, eps * peri, true);
+
+          if (approx.rows === 4 && cv.isContourConvex(approx)) {
+            maxArea = area;
+            bestPoly = [];
+            for (let r = 0; r < 4; r++) {
+              bestPoly.push({
+                x: Math.round(approx.data32S[r * 2] / scale),
+                y: Math.round(approx.data32S[r * 2 + 1] / scale)
+              });
+            }
+            foundQuad = true;
+            approx.delete();
+            break;
+          }
+          approx.delete();
+        }
+
+        // If contour has slight curve or notches (e.g. book spine/pages), use minAreaRect
+        if (!foundQuad && area > maxArea) {
+          try {
+            const rot = cv.minAreaRect(contour);
+            const vertices = cv.RotatedRect.points(rot);
+            if (vertices && vertices.length === 4) {
+              maxArea = area;
+              bestPoly = vertices.map((v: any) => ({
+                x: Math.round(v.x / scale),
+                y: Math.round(v.y / scale)
+              }));
+            }
+          } catch {
+            // Ignore minAreaRect errors
           }
         }
-        approx.delete();
       }
       contour.delete();
     }

@@ -11,8 +11,8 @@ import {
 } from 'lucide-react';
 import type { Point, QuadCorners, FilterType, DrawingStroke } from '../../types/scanner';
 import {
-  getDefaultCorners,
   getStandardFormatCorners,
+  getWholeImageCorners,
   detectDocumentCorners,
   applyPerspectiveWarp,
   applyImageFilter,
@@ -72,8 +72,12 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   const strokeWidth = 6;
   const [currentStroke, setCurrentStroke] = useState<Point[] | null>(null);
 
-  // Active dragging handle ('topLeft' | 'topRight' | 'bottomRight' | 'bottomLeft' | null)
-  const [activeHandle, setActiveHandle] = useState<keyof QuadCorners | null>(null);
+  // Crop shape preset: 'a4' | 'a5' | 'free' | 'full'
+  const [cropShapeMode, setCropShapeMode] = useState<'a4' | 'a5' | 'free' | 'full'>('a4');
+
+  // Active dragging handle ('topLeft' | 'topRight' | 'bottomRight' | 'bottomLeft' | 'center' | null)
+  const [activeHandle, setActiveHandle] = useState<keyof QuadCorners | 'center' | null>(null);
+  const dragStartRef = useRef<{ clientX: number; clientY: number; initialCorners: QuadCorners } | null>(null);
 
   // Load source image
   useEffect(() => {
@@ -82,7 +86,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     img.onload = () => {
       setSourceImg(img);
       if (!corners) {
-        setCorners(getDefaultCorners(img.width, img.height, 0.06));
+        setCorners(getStandardFormatCorners(img.width, img.height, 'a4', img.width > img.height));
       }
     };
     img.src = sourceDataUrl;
@@ -111,11 +115,6 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     }
   };
 
-  const handleResetCorners = () => {
-    if (!sourceImg) return;
-    setCorners(getDefaultCorners(sourceImg.width, sourceImg.height, 0.06));
-    showToast('Đã đặt lại 4 góc chuẩn', 'info');
-  };
 
   const handleSnapStandard = (format: 'a4' | 'a5') => {
     if (!sourceImg) return;
@@ -210,6 +209,19 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     setActiveHandle(handle);
   };
 
+  // Handle pointer dragging of entire center frame
+  const handleCenterPointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    if (!corners) return;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    setActiveHandle('center');
+    dragStartRef.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      initialCorners: { ...corners }
+    };
+  };
+
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!activeHandle || !sourceImg || !corners || !containerRef.current) return;
 
@@ -217,19 +229,80 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     const scaleX = sourceImg.width / rect.width;
     const scaleY = sourceImg.height / rect.height;
 
+    // Moving the entire frame
+    if (activeHandle === 'center' && dragStartRef.current) {
+      const dx = (e.clientX - dragStartRef.current.clientX) * scaleX;
+      const dy = (e.clientY - dragStartRef.current.clientY) * scaleY;
+      const init = dragStartRef.current.initialCorners;
+
+      const minX = Math.min(init.topLeft.x, init.bottomLeft.x);
+      const maxX = Math.max(init.topRight.x, init.bottomRight.x);
+      const minY = Math.min(init.topLeft.y, init.topRight.y);
+      const maxY = Math.max(init.bottomLeft.y, init.bottomRight.y);
+
+      const boundedDx = Math.max(-minX, Math.min(sourceImg.width - maxX, dx));
+      const boundedDy = Math.max(-minY, Math.min(sourceImg.height - maxY, dy));
+
+      setCorners({
+        topLeft: { x: Math.round(init.topLeft.x + boundedDx), y: Math.round(init.topLeft.y + boundedDy) },
+        topRight: { x: Math.round(init.topRight.x + boundedDx), y: Math.round(init.topRight.y + boundedDy) },
+        bottomRight: { x: Math.round(init.bottomRight.x + boundedDx), y: Math.round(init.bottomRight.y + boundedDy) },
+        bottomLeft: { x: Math.round(init.bottomLeft.x + boundedDx), y: Math.round(init.bottomLeft.y + boundedDy) }
+      });
+      return;
+    }
+
     const clientX = e.clientX - rect.left;
     const clientY = e.clientY - rect.top;
 
     const clampedX = Math.max(0, Math.min(sourceImg.width, clientX * scaleX));
     const clampedY = Math.max(0, Math.min(sourceImg.height, clientY * scaleY));
 
-    setCorners((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        [activeHandle]: { x: clampedX, y: clampedY }
-      };
-    });
+    if (cropShapeMode === 'a4' || cropShapeMode === 'a5') {
+      const isLandscape = sourceImg.width > sourceImg.height;
+      const ratio = isLandscape ? 1.4142 : 1 / 1.4142;
+
+      let anchorKey: keyof QuadCorners;
+      if (activeHandle === 'bottomRight') anchorKey = 'topLeft';
+      else if (activeHandle === 'topLeft') anchorKey = 'bottomRight';
+      else if (activeHandle === 'bottomLeft') anchorKey = 'topRight';
+      else anchorKey = 'bottomLeft';
+
+      const anchor = corners[anchorKey];
+      let newW = Math.abs(clampedX - anchor.x);
+      let newH = newW / ratio;
+
+      if (newH > sourceImg.height) {
+        newH = sourceImg.height;
+        newW = newH * ratio;
+      }
+
+      const signX = clampedX >= anchor.x ? 1 : -1;
+      const signY = clampedY >= anchor.y ? 1 : -1;
+
+      const targetX = Math.max(0, Math.min(sourceImg.width, anchor.x + signX * newW));
+      const targetY = Math.max(0, Math.min(sourceImg.height, anchor.y + signY * newH));
+
+      const minCornerX = Math.min(anchor.x, targetX);
+      const maxCornerX = Math.max(anchor.x, targetX);
+      const minCornerY = Math.min(anchor.y, targetY);
+      const maxCornerY = Math.max(anchor.y, targetY);
+
+      setCorners({
+        topLeft: { x: Math.round(minCornerX), y: Math.round(minCornerY) },
+        topRight: { x: Math.round(maxCornerX), y: Math.round(minCornerY) },
+        bottomRight: { x: Math.round(maxCornerX), y: Math.round(maxCornerY) },
+        bottomLeft: { x: Math.round(minCornerX), y: Math.round(maxCornerY) }
+      });
+    } else {
+      setCorners((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          [activeHandle]: { x: Math.round(clampedX), y: Math.round(clampedY) }
+        };
+      });
+    }
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -240,6 +313,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
         // Safe ignore
       }
       setActiveHandle(null);
+      dragStartRef.current = null;
     }
   };
 
@@ -452,7 +526,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
                 }}
               />
 
-              {/* SVG polygon connecting 4 corners */}
+              {/* SVG polygon connecting 4 corners with mask & grid */}
               <svg
                 style={{
                   position: 'absolute',
@@ -464,28 +538,138 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
                 }}
                 viewBox={`0 0 ${sourceImg.width} ${sourceImg.height}`}
               >
+                {/* SVG definitions for mask */}
+                <defs>
+                  <mask id="cropVignetteMask">
+                    <rect width="100%" height="100%" fill="white" />
+                    <polygon
+                      points={`${corners.topLeft.x},${corners.topLeft.y} ${corners.topRight.x},${corners.topRight.y} ${corners.bottomRight.x},${corners.bottomRight.y} ${corners.bottomLeft.x},${corners.bottomLeft.y}`}
+                      fill="black"
+                    />
+                  </mask>
+                </defs>
+
+                {/* Darkened mask outside crop box */}
+                <rect width="100%" height="100%" fill="rgba(0, 0, 0, 0.65)" mask="url(#cropVignetteMask)" />
+
+                {/* 3x3 Grid lines inside crop box */}
+                <line
+                  x1={corners.topLeft.x + (corners.bottomLeft.x - corners.topLeft.x) / 3}
+                  y1={corners.topLeft.y + (corners.bottomLeft.y - corners.topLeft.y) / 3}
+                  x2={corners.topRight.x + (corners.bottomRight.x - corners.topRight.x) / 3}
+                  y2={corners.topRight.y + (corners.bottomRight.y - corners.topRight.y) / 3}
+                  stroke="rgba(255, 255, 255, 0.35)"
+                  strokeWidth="1.5"
+                  strokeDasharray="4,4"
+                />
+                <line
+                  x1={corners.topLeft.x + 2 * (corners.bottomLeft.x - corners.topLeft.x) / 3}
+                  y1={corners.topLeft.y + 2 * (corners.bottomLeft.y - corners.topLeft.y) / 3}
+                  x2={corners.topRight.x + 2 * (corners.bottomRight.x - corners.topRight.x) / 3}
+                  y2={corners.topRight.y + 2 * (corners.bottomRight.y - corners.topRight.y) / 3}
+                  stroke="rgba(255, 255, 255, 0.35)"
+                  strokeWidth="1.5"
+                  strokeDasharray="4,4"
+                />
+                <line
+                  x1={corners.topLeft.x + (corners.topRight.x - corners.topLeft.x) / 3}
+                  y1={corners.topLeft.y + (corners.topRight.y - corners.topLeft.y) / 3}
+                  x2={corners.bottomLeft.x + (corners.bottomRight.x - corners.bottomLeft.x) / 3}
+                  y2={corners.bottomLeft.y + (corners.bottomRight.y - corners.bottomLeft.y) / 3}
+                  stroke="rgba(255, 255, 255, 0.35)"
+                  strokeWidth="1.5"
+                  strokeDasharray="4,4"
+                />
+                <line
+                  x1={corners.topLeft.x + 2 * (corners.topRight.x - corners.topLeft.x) / 3}
+                  y1={corners.topLeft.y + 2 * (corners.topRight.y - corners.topLeft.y) / 3}
+                  x2={corners.bottomLeft.x + 2 * (corners.bottomRight.x - corners.bottomLeft.x) / 3}
+                  y2={corners.bottomLeft.y + 2 * (corners.bottomRight.y - corners.bottomLeft.y) / 3}
+                  stroke="rgba(255, 255, 255, 0.35)"
+                  strokeWidth="1.5"
+                  strokeDasharray="4,4"
+                />
+
+                {/* Main active crop boundary polygon */}
                 <polygon
                   points={`${corners.topLeft.x},${corners.topLeft.y} ${corners.topRight.x},${corners.topRight.y} ${corners.bottomRight.x},${corners.bottomRight.y} ${corners.bottomLeft.x},${corners.bottomLeft.y}`}
-                  fill="rgba(59, 130, 246, 0.2)"
-                  stroke="#3b82f6"
-                  strokeWidth={Math.max(2, sourceImg.width / 350)}
-                  strokeDasharray="6,4"
+                  fill={cropShapeMode === 'a4' ? 'rgba(16, 185, 129, 0.12)' : cropShapeMode === 'a5' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(59, 130, 246, 0.15)'}
+                  stroke={cropShapeMode === 'a4' ? '#10b981' : cropShapeMode === 'a5' ? '#f59e0b' : '#3b82f6'}
+                  strokeWidth={Math.max(3, sourceImg.width / 260)}
+                  strokeDasharray={cropShapeMode === 'free' ? '6,4' : undefined}
+                  style={{ pointerEvents: 'auto', cursor: 'move' }}
+                  onPointerDown={handleCenterPointerDown}
                 />
               </svg>
+
+              {/* Floating Badge on top of crop polygon */}
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${((corners.topLeft.x + corners.topRight.x) / (2 * sourceImg.width)) * 100}%`,
+                  top: `${(Math.min(corners.topLeft.y, corners.topRight.y) / sourceImg.height) * 100}%`,
+                  transform: 'translate(-50%, -120%)',
+                  background: cropShapeMode === 'a4' ? 'rgba(16, 185, 129, 0.95)' : cropShapeMode === 'a5' ? 'rgba(245, 158, 11, 0.95)' : 'rgba(30, 41, 59, 0.95)',
+                  color: '#fff',
+                  fontSize: 11,
+                  fontWeight: 800,
+                  padding: '3px 12px',
+                  borderRadius: 9999,
+                  boxShadow: '0 4px 15px rgba(0,0,0,0.6)',
+                  whiteSpace: 'nowrap',
+                  pointerEvents: 'none',
+                  zIndex: 25,
+                  letterSpacing: '0.5px'
+                }}
+              >
+                {cropShapeMode === 'a4'
+                  ? '📄 KHUNG A4 CHUẨN (1 : 1.414)'
+                  : cropShapeMode === 'a5'
+                  ? '📘 KHUNG A5 CHUẨN'
+                  : cropShapeMode === 'full'
+                  ? '🖼️ TOÀN BỘ ẢNH'
+                  : '📐 KHUNG TỰ DO (4 GÓC)'}
+              </div>
 
               {/* 4 Draggable Interactive Corner Handles */}
               {(['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as Array<keyof QuadCorners>).map((handle) => {
                 const pt = corners[handle];
                 const pctX = (pt.x / sourceImg.width) * 100;
                 const pctY = (pt.y / sourceImg.height) * 100;
+                const handleColor = cropShapeMode === 'a4' ? '#10b981' : cropShapeMode === 'a5' ? '#f59e0b' : '#3b82f6';
                 return (
                   <div
                     key={handle}
-                    className="corner-handle"
-                    style={{ left: `${pctX}%`, top: `${pctY}%` }}
+                    style={{
+                      position: 'absolute',
+                      left: `${pctX}%`,
+                      top: `${pctY}%`,
+                      transform: 'translate(-50%, -50%)',
+                      width: 36,
+                      height: 36,
+                      borderRadius: '50%',
+                      background: 'transparent',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'grab',
+                      touchAction: 'none',
+                      zIndex: 25
+                    }}
                     onPointerDown={handlePointerDown(handle)}
                     title={`Kéo góc: ${handle}`}
-                  />
+                  >
+                    <div
+                      style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: '50%',
+                        background: '#ffffff',
+                        border: `4px solid ${handleColor}`,
+                        boxShadow: `0 0 12px ${handleColor}`
+                      }}
+                    />
+                  </div>
                 );
               })}
             </div>
@@ -507,40 +691,157 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
         )}
       </div>
 
-      {/* Sub-toolbar (Crop actions or Filter / Drawing actions) */}
+      {/* Smart Bottom Control Center */}
       <div
         style={{
-          background: '#0f172a',
+          background: '#090d16',
           borderTop: '1px solid #1e293b',
-          padding: '8px 16px',
+          padding: '10px 16px 16px',
           display: 'flex',
           flexDirection: 'column',
-          gap: 8
+          gap: 10,
+          zIndex: 30
         }}
       >
         {editorMode === 'crop' ? (
-          <div style={{ display: 'flex', justifyContent: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <button onClick={handleAutoDetect} className="btn btn-secondary" style={{ fontSize: 12 }}>
-              <Sparkles size={15} color="#3b82f6" /> Tự tìm 4 góc (AI)
-            </button>
-            <button
-              onClick={() => handleSnapStandard('a4')}
-              className="btn btn-secondary"
-              style={{ fontSize: 12 }}
-            >
-              Căn Khung A4
-            </button>
-            <button
-              onClick={() => handleSnapStandard('a5')}
-              className="btn btn-secondary"
-              style={{ fontSize: 12 }}
-            >
-              Căn Khung A5
-            </button>
-            <button onClick={handleResetCorners} className="btn btn-ghost" style={{ fontSize: 12 }}>
-              Đặt lại góc
-            </button>
-          </div>
+          <>
+            {/* Row 1: Smart Shape Mode Segmented Tabs */}
+            <div style={{ display: 'flex', background: 'rgba(30, 41, 59, 0.8)', borderRadius: 10, padding: 3, gap: 2 }}>
+              <button
+                onClick={() => {
+                  setCropShapeMode('a4');
+                  handleSnapStandard('a4');
+                }}
+                style={{
+                  flex: 1,
+                  padding: '8px 4px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: cropShapeMode === 'a4' ? '#10b981' : 'transparent',
+                  color: cropShapeMode === 'a4' ? '#fff' : '#94a3b8',
+                  fontWeight: 700,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 4
+                }}
+              >
+                📄 Khung A4
+              </button>
+
+              <button
+                onClick={() => {
+                  setCropShapeMode('a5');
+                  handleSnapStandard('a5');
+                }}
+                style={{
+                  flex: 1,
+                  padding: '8px 4px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: cropShapeMode === 'a5' ? '#f59e0b' : 'transparent',
+                  color: cropShapeMode === 'a5' ? '#fff' : '#94a3b8',
+                  fontWeight: 700,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 4
+                }}
+              >
+                📘 Khung A5
+              </button>
+
+              <button
+                onClick={() => {
+                  setCropShapeMode('free');
+                  showToast('Chế độ Tự do: Kéo độc lập 4 góc theo ý muốn', 'info', 1200);
+                }}
+                style={{
+                  flex: 1,
+                  padding: '8px 4px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: cropShapeMode === 'free' ? '#3b82f6' : 'transparent',
+                  color: cropShapeMode === 'free' ? '#fff' : '#94a3b8',
+                  fontWeight: 700,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 4
+                }}
+              >
+                📐 Tự Do
+              </button>
+
+              <button
+                onClick={() => {
+                  setCropShapeMode('full');
+                  if (sourceImg) {
+                    setCorners(getWholeImageCorners(sourceImg.width, sourceImg.height));
+                    showToast('Đã chọn toàn bộ ảnh', 'info', 1200);
+                  }
+                }}
+                style={{
+                  flex: 1,
+                  padding: '8px 4px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: cropShapeMode === 'full' ? '#6366f1' : 'transparent',
+                  color: cropShapeMode === 'full' ? '#fff' : '#94a3b8',
+                  fontWeight: 700,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 4
+                }}
+              >
+                🖼️ Toàn Bộ
+              </button>
+            </div>
+
+            {/* Row 2: Smart Detection & Centering Actions */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <button
+                onClick={handleAutoDetect}
+                className="btn btn-secondary"
+                style={{ flex: 1.2, padding: '8px 12px', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                title="Tự động phát hiện mép sách/tài liệu"
+              >
+                <Sparkles size={15} color="#38bdf8" /> ✨ AI Tìm Mép Sách
+              </button>
+
+              <button
+                onClick={() => handleSnapStandard(cropShapeMode === 'a5' ? 'a5' : 'a4')}
+                className="btn btn-ghost"
+                style={{ flex: 0.9, padding: '8px 10px', fontSize: 12, color: '#94a3b8', background: 'rgba(30, 41, 59, 0.5)', borderRadius: 8, textAlign: 'center' }}
+                title="Đặt lại khung về giữa ảnh"
+              >
+                Căn Giữa
+              </button>
+
+              <button
+                onClick={handleRotate}
+                className="btn btn-ghost"
+                style={{ flex: 0.9, padding: '8px 10px', fontSize: 12, color: '#94a3b8', background: 'rgba(30, 41, 59, 0.5)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
+                title="Xoay ảnh 90 độ"
+              >
+                <RotateCw size={14} /> Xoay 90°
+              </button>
+            </div>
+
+            {/* Hint text */}
+            <p style={{ margin: 0, textAlign: 'center', fontSize: 11, color: '#64748b' }}>
+              💡 Chạm giữ bên trong khung để di chuyển • Kéo 4 góc tròn để phóng to / thu nhỏ
+            </p>
+          </>
         ) : (
           /* Filter & Draw Toolbar */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -631,23 +932,35 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           </div>
         )}
 
-        {/* Action Commit Button */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
+        {/* Row 3: Action Commit Buttons */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 }}>
           <button
             onClick={() => {
               if (editorMode === 'crop') setEditorMode('preview');
               else setEditorMode('crop');
             }}
             className="btn btn-secondary"
-            style={{ fontSize: 13 }}
+            style={{ padding: '12px 16px', fontSize: 13, fontWeight: 600, borderRadius: 10, display: 'flex', alignItems: 'center', gap: 6 }}
           >
-            {editorMode === 'crop' ? 'Xem trước nét' : 'Chỉnh lại 4 góc'}
+            {editorMode === 'crop' ? <><Eye size={16} /> Xem trước nét</> : <><Crop size={16} /> Chỉnh lại góc</>}
           </button>
 
           <button
             onClick={handleSaveAndCommit}
             className="btn btn-primary"
-            style={{ padding: '10px 24px', fontSize: 14 }}
+            style={{
+              flex: 1,
+              padding: '12px 20px',
+              fontSize: 14,
+              fontWeight: 700,
+              borderRadius: 10,
+              background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+              boxShadow: '0 4px 15px rgba(37, 99, 235, 0.4)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8
+            }}
           >
             <Check size={18} /> Lưu trang vào tài liệu
           </button>
